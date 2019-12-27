@@ -4,6 +4,8 @@ using UnityEngine;
 using DG.Tweening;
 using UnityEngine.UI;
 using UnityEngine.Video;
+using System.IO;
+using System.Linq;
 
 public class CarouselManager : MonoBehaviour
 {
@@ -24,14 +26,29 @@ public class CarouselManager : MonoBehaviour
     public Vector2 RightFigPos = new Vector2(200, 0);
     public float BehindScale = 0.9f;
     public float AnimDuration = 0.35f;
-    
+
+    [Header("Resource Config")]
+    public string ResourcePath = "Background";
+    public string Suffix = ".png";
+
+    private const string ThumbnailName = "Thumbnails";
+    private const string VideoName = "Videos";
+    private const string ImageSuffix = ".png";
+    private string ThumbPath;
+    private string VideoPath;
+
+
+    private void Awake() {
+        ThumbPath = Path.Combine(ResourcePath, ThumbnailName);
+        VideoPath = Path.Combine(ResourcePath, VideoName);
+    }
 
     private void Start() {
         videoManager = GetComponentInChildren<VideoManager>();
         LoadImages();
         Reset(0);
-        if (images.Count > 0) {
-            transform.Find("NoImageTip").gameObject.SetActive(false);
+        if (images.Count == 0) {
+            transform.Find("NoImageTip").gameObject.SetActive(true);
         }
     }
 
@@ -62,14 +79,15 @@ public class CarouselManager : MonoBehaviour
     // 初始化加载图片 | Sprite 路径：Resources/Thumbnails/...
     private void LoadImages() {
         Transform imagesParent = transform.Find("Images");
-
-        List<string> imageNames;        // => 获取缩略图 Names (即视频标志符)
-        imageNames = new List<string>() { "Demo/demo1", "Demo/demo2", "Demo/demo3" }; // TEST
+        List<string> imageNames = LoadImageNames();
 
         foreach (string imageName in imageNames) {
             GameObject go = Instantiate(CarouselImagePrefab, imagesParent);
             go.transform.localPosition = Vector3.zero;
-            go.GetComponent<Image>().sprite = Resources.Load<Sprite>("Thumbnails/" + imageName);
+            Sprite sprite = LoadThumbnail(imageName);
+            go.GetComponent<Image>().sprite = sprite;
+            go.name = imageName;
+
             images.Add(go.GetComponent<RectTransform>());
         }
     }
@@ -92,17 +110,12 @@ public class CarouselManager : MonoBehaviour
         images[currentIndex].SetAsLastSibling();
         videoManager.Stop();
     }
-
-
+    
     // 点击当前主图片
     public void Click() {
-        if (images.Count == 0) return;
-        string imageName = "";
-        Sprite sprite = images[currentIndex].GetComponent<Image>().sprite;
-        if (sprite) {
-            imageName = sprite.name;
-        }
-        videoManager.Play(imageName);
+        if (images.Count == 0)
+            return;
+        videoManager.Play(images[currentIndex].name);
     }
     
     public void Next(float duration = 0) {
@@ -141,6 +154,58 @@ public class CarouselManager : MonoBehaviour
         images[Index(0)].GetComponent<Image>().DOColor(Color.white, duration);
 
         images[Index(0)].SetAsLastSibling();
+    }
+
+
+    // 加载 ResourcePath 下的缩略图 name
+    private List<string> LoadImageNames() {
+        List<string> newNames = new List<string>();
+        string fullPath = Path.Combine(Application.dataPath, "Resources", VideoPath);
+
+        // 生成 newNames:List 当前文件夹下所有 FileSuffix 后缀的文件名
+        if (Directory.Exists(fullPath)) {
+            DirectoryInfo direction = new DirectoryInfo(fullPath);
+            FileInfo[] files = direction.GetFiles("*", SearchOption.AllDirectories);
+
+            char[] suffixArr = Suffix.ToArray();
+            for (int i = 0; i < files.Length; i++) {
+                if (files[i].Name.EndsWith(Suffix))
+                    newNames.Add(files[i].Name.TrimEnd(suffixArr));
+            }
+        }
+
+        return newNames;
+    }
+
+    // 加载缩略图，若丢失缩略图则尝试生成
+    private Sprite LoadThumbnail(string imageName) {
+        Sprite sprite = null;
+        string path = Path.Combine(ThumbPath, imageName) + ImageSuffix;
+
+        sprite = ResourceLoader.LoadSprite(path);
+        if (sprite == null) {
+            GameObject.Find("GetImage").GetComponent<GetImage>().GeneratePreviewImage(
+                VideoResourceAPI.FillVideoPath(imageName),
+                Path.Combine(Application.dataPath, "Resources", ThumbPath) + "/"
+                );
+            StartCoroutine(ReloadEmptySprite());
+        }
+        return sprite;
+    }
+
+    // 再次尝试加载没有 Sprite 的缩略图，默认延迟0.3秒
+    private IEnumerator ReloadEmptySprite(float delay=.3f) {
+        yield return new WaitForSeconds(delay);
+        foreach (RectTransform item in images) {
+            Image image = item.GetComponent<Image>();
+            if (image.sprite == null) {
+                int times = 3;
+                while (image.sprite == null && times-- > 0) {
+                    image.sprite = ResourceLoader.LoadSprite(Path.Combine(ThumbPath, item.name) + ImageSuffix);
+                    yield return new WaitForSeconds(.1f);
+                }
+            }
+        }
     }
 
     private int Index(int offset = 0) {
